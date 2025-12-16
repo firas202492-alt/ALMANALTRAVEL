@@ -48,6 +48,10 @@ const AgentsList: React.FC = () => {
   }, [paymentCurrency]);
 
   const getAgentMetrics = (agent: Agent, targetCurrency?: Currency) => {
+      // FIX: Find other agents whose names include THIS agent's name (e.g. "X Venus" includes "Venus")
+      // This prevents "Payment to X Venus" from showing up in "Venus" account.
+      const conflictingAgents = agents.filter(a => a.id !== agent.id && a.name.includes(agent.name));
+
       // 1. Calculate Total Debt from Bookings (Services)
       const totalServicesJOD = allBookings.reduce((total, booking) => {
           const agentServices = booking.services?.filter(s => s.supplier === agent.name) || [];
@@ -60,7 +64,14 @@ const AgentsList: React.FC = () => {
 
       // 2. Calculate Total Payments made to this Agent
       const totalPaymentsJOD = allTransactions.reduce((total, t) => {
-          if (t.type === TransactionType.EXPENSE && t.description.includes(agent.name)) {
+          if (t.type === TransactionType.EXPENSE) {
+              // Basic check
+              if (!t.description.includes(agent.name)) return total;
+
+              // Strict check: If the description also contains the name of a "Super Agent" (e.g. X Venus), ignore it for the "Sub Agent" (Venus).
+              const isFalseMatch = conflictingAgents.some(conflict => t.description.includes(conflict.name));
+              if (isFalseMatch) return total;
+
               return total + t.amount;
           }
           return total;
@@ -78,11 +89,11 @@ const AgentsList: React.FC = () => {
       return { totalServices: totalServicesJOD, effectiveBalance: effectiveBalanceJOD };
   };
 
-  // Calculate Total Payables (Money we owe to agents)
+  // --- NEW: Calculate Total Payables (Money we owe to agents) ---
   const totalAgentsPayables = useMemo(() => {
       return agents.reduce((total, agent) => {
           const { effectiveBalance } = getAgentMetrics(agent, 'JOD'); // Get in JOD for consistency
-          // Assuming Positive Balance = We owe them
+          // Assuming Positive Balance = We owe them (Payable)
           return total + (effectiveBalance > 0 ? effectiveBalance : 0);
       }, 0);
   }, [agents, allBookings, allTransactions]);
@@ -144,6 +155,7 @@ const AgentsList: React.FC = () => {
   const handleOpenPayment = (agent: Agent) => { setSelectedAgent(agent); setPayAmount(''); setPaymentCurrency(agent.currency || 'JOD'); setExchangeRate('1'); setSelectedTreasuryId(treasury.length > 0 ? treasury[0].id : ''); setIsPaymentModalOpen(true); };
   const handleSubmitPayment = (e: React.FormEvent) => { e.preventDefault(); const amountValue = Number(payAmount); const rateValue = parseFloat(exchangeRate); if (selectedAgent && amountValue > 0 && selectedTreasuryId && !isNaN(rateValue)) { const amountInJOD = amountValue * rateValue; addAgentPayment(selectedAgent.id, amountInJOD, selectedTreasuryId); showNotification('تم تسجيل سند الصرف وتحديث الأرصدة', 'success'); setIsPaymentModalOpen(false); } };
   
+  // --- NEW: Print Total Payables Report ---
   const handlePrintTotalPayables = () => {
       const printWindow = window.open('', '_blank');
       if (!printWindow) return;
@@ -234,6 +246,9 @@ const AgentsList: React.FC = () => {
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
 
+    // FIX for Reporting: Use same logic as metrics to avoid double counting
+    const conflictingAgents = agents.filter(a => a.id !== agent.id && a.name.includes(agent.name));
+
     // 1. Get Services
     const agentServices = allBookings.flatMap(b => 
         b.services?.filter(s => s.supplier === agent.name).map(s => ({
@@ -245,10 +260,14 @@ const AgentsList: React.FC = () => {
         })) || []
     );
 
-    // 2. Get Payments
-    const agentPayments = allTransactions.filter(t => 
-        t.type === TransactionType.EXPENSE && t.description.includes(agent.name)
-    ).map(t => ({
+    // 2. Get Payments (With Exclusion Logic)
+    const agentPayments = allTransactions.filter(t => {
+        if (t.type !== TransactionType.EXPENSE) return false;
+        if (!t.description.includes(agent.name)) return false;
+        // Strict exclusion
+        if (conflictingAgents.some(conflict => t.description.includes(conflict.name))) return false;
+        return true;
+    }).map(t => ({
         date: t.date,
         ref: t.referenceNo || t.id,
         desc: t.description,
@@ -395,7 +414,7 @@ const AgentsList: React.FC = () => {
         </button>
       </div>
 
-      {/* Summary Card - Total Payables (New) */}
+      {/* --- NEW: Summary Card - Total Payables --- */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
          <div className="bg-white dark:bg-[#1e293b] p-6 rounded-xl border border-slate-200 dark:border-slate-800 shadow-lg flex items-center justify-between relative overflow-hidden group">
             <div className="absolute top-0 right-0 w-2 h-full bg-rose-500"></div>
@@ -409,6 +428,7 @@ const AgentsList: React.FC = () => {
                 <div className="w-12 h-12 rounded-full bg-rose-100 dark:bg-rose-900/30 flex items-center justify-center text-rose-600 dark:text-rose-500 border border-rose-200 dark:border-rose-900/50">
                    <TrendingDown size={24} />
                 </div>
+                {/* Print Button */}
                 <button onClick={handlePrintTotalPayables} className="text-[10px] flex items-center gap-1 bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors">
                     <Printer size={12} /> طباعة كشف
                 </button>
