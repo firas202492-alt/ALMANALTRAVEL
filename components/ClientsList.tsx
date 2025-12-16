@@ -39,6 +39,9 @@ const ClientsList: React.FC = () => {
   // Dynamic Calculation of Client Balance
   // Balance = Opening Balance (DB) + Total Sales (Bookings) - Total Payments (Transactions)
   const getClientMetrics = (client: Client) => {
+      // FIX: Check for other clients with overlapping names
+      const conflictingClients = clients.filter(c => c.id !== client.id && c.name.includes(client.name));
+
       // 1. Total Sales (Debits) from Bookings
       const totalSales = allBookings
           .filter(b => b.clientName === client.name && b.status !== BookingStatus.CANCELLED && b.status !== BookingStatus.VOIDED)
@@ -46,11 +49,17 @@ const ClientsList: React.FC = () => {
 
       // 2. Total Payments (Credits) from Transactions
       const totalPayments = allTransactions
-          .filter(t => 
-              t.type === TransactionType.INCOME && 
-              (t.category === 'مقبوضات عملاء' || t.category === 'مقبوضات حجوزات') && 
-              t.description.includes(client.name)
-          )
+          .filter(t => {
+              if (t.type !== TransactionType.INCOME) return false;
+              if (t.category !== 'مقبوضات عملاء' && t.category !== 'مقبوضات حجوزات') return false;
+              if (!t.description.includes(client.name)) return false;
+              
+              // Strict check: ignore if description matches a "Super Client" name
+              const isFalseMatch = conflictingClients.some(conflict => t.description.includes(conflict.name));
+              if (isFalseMatch) return false;
+
+              return true;
+          })
           .reduce((sum, t) => sum + t.amount, 0);
 
       // 3. Effective Balance
@@ -161,10 +170,12 @@ const ClientsList: React.FC = () => {
     }
   };
 
+  // --- NEW: Print Total Debt Report ---
   const handlePrintTotalDebt = () => {
       const printWindow = window.open('', '_blank');
       if (!printWindow) return;
 
+      // Filter only clients with debt
       const debtors = clients
           .map(c => ({...c, currentBalance: getClientMetrics(c)}))
           .filter(c => c.currentBalance > 0.01)
@@ -251,6 +262,9 @@ const ClientsList: React.FC = () => {
      const printWindow = window.open('', '_blank');
     if (!printWindow) return;
 
+    // FIX for Reporting: Use same logic as metrics to avoid double counting
+    const conflictingClients = clients.filter(c => c.id !== client.id && c.name.includes(client.name));
+
     // 1. Extract Client Bookings (Debits / Invoices)
     const clientBookings = allBookings
         .filter(b => b.clientName === client.name && b.status !== BookingStatus.CANCELLED && b.status !== BookingStatus.VOIDED)
@@ -263,11 +277,14 @@ const ClientsList: React.FC = () => {
         }));
 
     // 2. Extract Client Receipts (Credits / Payments)
-    const clientReceipts = allTransactions.filter(t => 
-        t.type === TransactionType.INCOME &&
-        (t.category === 'مقبوضات عملاء' || t.category === 'مقبوضات حجوزات') && 
-        t.description.includes(client.name)
-    ).map(t => ({
+    const clientReceipts = allTransactions.filter(t => {
+        if (t.type !== TransactionType.INCOME) return false;
+        if (t.category !== 'مقبوضات عملاء' && t.category !== 'مقبوضات حجوزات') return false;
+        if (!t.description.includes(client.name)) return false;
+        // Strict exclusion
+        if (conflictingClients.some(conflict => t.description.includes(conflict.name))) return false;
+        return true;
+    }).map(t => ({
         date: t.date,
         ref: `REC-${t.referenceNo || t.id}`,
         desc: t.description,
@@ -477,6 +494,7 @@ const ClientsList: React.FC = () => {
                 <div className="w-12 h-12 rounded-full bg-rose-100 dark:bg-rose-900/30 flex items-center justify-center text-rose-600 dark:text-rose-500 border border-rose-200 dark:border-rose-900/50">
                    <TrendingDown size={24} />
                 </div>
+                {/* NEW: Print Button for Total Debt */}
                 <button onClick={handlePrintTotalDebt} className="text-[10px] flex items-center gap-1 bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors">
                     <Printer size={12} /> طباعة كشف
                 </button>
